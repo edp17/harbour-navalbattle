@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>harbour-navalbattle.desktop</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+  <name>Naval Battle</name>
+  <summary>Battleship-style game for Sailfish OS</summary>
+  <description>
+    <p>Play a classic naval battle game against an AI opponent. Fire at the enemy grid, sink all ships, and win the match.</p>
+  </description>
+  <launchable type="desktop-id">harbour-navalbattle.desktop</launchable>
+  <provides>
+    <binary>harbour-navalbattle</binary>
+  </provides>
+</component>

@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+X-Nemo-Application-Type=Silica
+Icon=harbour-navalbattle
+Exec=harbour-navalbattle
+Name=Naval Battle
+
+[X-Sailjail]
+Sandboxing=Disabled
