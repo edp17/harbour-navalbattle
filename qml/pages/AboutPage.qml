@@ -27,6 +27,13 @@ Page {
         anchors.fill: parent
         contentHeight: contentColumn.height + Theme.paddingLarge
 
+        PullDownMenu {
+            MenuItem {
+                text: qsTr("Game Rules")
+                onClicked: pageStack.push(Qt.resolvedUrl("RulesPage.qml"))
+            }
+        }
+
         Column {
             id: contentColumn
             width: parent.width
@@ -64,7 +71,7 @@ Page {
             // Version
             Label {
                 anchors.horizontalCenter: parent.horizontalCenter
-                text: qsTr("Version 1.0")
+                text: qsTr("Version %1").arg(appVersion)
                 font.pixelSize: Theme.fontSizeMedium
                 color: Theme.secondaryColor
             }

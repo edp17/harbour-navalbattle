@@ -24,24 +24,15 @@ GameEngine::GameEngine(QObject *parent)
 
     m_elapsedTick.setInterval(1000);
     m_elapsedTick.setSingleShot(false);
-    connect(&m_elapsedTick, &QTimer::timeout, this, [this]() {
-        if (m_gameOver) return;
-        if (m_setupMode) return;
-        int sec = int(m_elapsedTimer.elapsed() / 1000) + m_elapsedSecondsBase;
-        if (sec != m_elapsedSeconds) {
-            m_elapsedSeconds = sec;
-            emit elapsedSecondsChanged();
-        }
-    });
+    connect(&m_elapsedTick, &QTimer::timeout,
+            this, &GameEngine::updateElapsedSeconds);
 
-    // Elapsed timer measures *battle time* only. Keep it stopped during setup.
-    m_elapsedSecondsBase = 0;
+    // Ranked time counts only the periods in which the player can act.
+    m_elapsedMillisecondsBase = 0;
     m_elapsedSeconds = 0;
-    m_elapsedTimer.restart();
     m_elapsedTick.stop();
 
-    // Seed legacy Qt RNG (Qt < 5.10 has no QRandomGenerator)
-    qsrand(static_cast<uint>(QDateTime::currentMSecsSinceEpoch() & 0xffffffff));
+    seedRandom(static_cast<quint32>(QDateTime::currentMSecsSinceEpoch() & 0xffffffff));
     m_booting = true;
     // Do NOT start a new game here; main.cpp decides whether to restore or start fresh.
 }
@@ -60,8 +51,67 @@ void GameEngine::setNoTouchRule(bool v)
 {
     if (m_noTouchRule == v) return;
     m_noTouchRule = v;
+
+    // A fleet placed while touching was allowed may become illegal when the
+    // stricter rule is enabled. Preserve valid layouts; clear only invalid ones.
+    if (m_setupMode && v && !fleetSatisfiesNoTouchRule(m_player)) {
+        m_player.cells.fill(Water);
+        m_player.ships.clear();
+        m_setupHistory.clear();
+        m_setupPlaced = QVector<bool>(m_setupLens.size(), false);
+        m_setupSelectedIndex = 0;
+        m_lastAction = QStringLiteral("Fleet cleared for no-touch rule");
+        emit boardsChanged();
+        emit statusChanged();
+    }
+    if (m_setupMode && v && !fleetSatisfiesNoTouchRule(m_enemy)) {
+        placeFleetRandom(m_enemy);
+    }
     emit setupChanged();
     scheduleSave();
+}
+
+qint64 GameEngine::elapsedMilliseconds() const
+{
+    return m_elapsedMillisecondsBase
+        + (m_elapsedTimerRunning ? m_elapsedTimer.elapsed() : 0);
+}
+
+void GameEngine::updateElapsedSeconds()
+{
+    const int seconds = int(elapsedMilliseconds() / 1000);
+    if (seconds == m_elapsedSeconds) return;
+    m_elapsedSeconds = seconds;
+    emit elapsedSecondsChanged();
+}
+
+void GameEngine::startElapsedTimer()
+{
+    if (m_elapsedTimerRunning || !m_applicationActive || m_setupMode
+            || m_gameOver || !m_playerTurn) {
+        return;
+    }
+    m_elapsedTimer.restart();
+    m_elapsedTimerRunning = true;
+    m_elapsedTick.start();
+}
+
+void GameEngine::stopElapsedTimer()
+{
+    if (m_elapsedTimerRunning) {
+        m_elapsedMillisecondsBase += m_elapsedTimer.elapsed();
+        m_elapsedTimerRunning = false;
+    }
+    m_elapsedTick.stop();
+    updateElapsedSeconds();
+}
+
+void GameEngine::setApplicationActive(bool active)
+{
+    if (m_applicationActive == active) return;
+    m_applicationActive = active;
+    if (active) startElapsedTimer();
+    else stopElapsedTimer();
 }
 
 void GameEngine::initSetupDefaults()
@@ -103,10 +153,9 @@ m_gameOver = false;
     m_lastAiShotX = m_lastAiShotY = -1;
 
     // Timer reset (battle timer starts when Start battle is pressed)
-    m_elapsedSecondsBase = 0;
+    stopElapsedTimer();
+    m_elapsedMillisecondsBase = 0;
     m_elapsedSeconds = 0;
-    m_elapsedTimer.restart();
-    m_elapsedTick.stop();
     emit elapsedSecondsChanged();
 
     // Setup phase: enemy is placed, player must place manually (or Auto-place from menu)
@@ -148,8 +197,11 @@ void GameEngine::reshufflePlayerShips()
 
     m_player.cells.fill(Water);
     m_player.ships.clear();
-    placeFleetRandom(m_player);
-    setStatus(m_statusText, QStringLiteral("Your fleet reshuffled"));
+    if (placeFleetRandom(m_player)) {
+        setStatus(m_statusText, QStringLiteral("Your fleet reshuffled"));
+    } else {
+        setStatus(m_statusText, QStringLiteral("Fleet placement failed"));
+    }
     emitAllChanged();
 }
 
@@ -244,7 +296,7 @@ void GameEngine::resetBoards()
         std::fill(m_enemyRevealed.begin(), m_enemyRevealed.end(), false);
 }
 
-void GameEngine::placeFleetRandom(Board &b)
+bool GameEngine::placeFleetRandom(Board &b)
 {
     struct Def { int len; const char* name; };
     const Def fleet[] = {
@@ -255,12 +307,60 @@ void GameEngine::placeFleetRandom(Board &b)
         {2, "Destroyer"},
     };
 
-    for (const auto &s : fleet) {
-        for (int attempt = 0; attempt < 5000; ++attempt) {
-            if (tryPlaceShip(b, s.len, QString::fromUtf8(s.name), m_noTouchRule))
+    // Restart the whole fleet when an individual ship cannot be placed. This
+    // guarantees callers never receive a silently incomplete random fleet.
+    for (int fleetAttempt = 0; fleetAttempt < 100; ++fleetAttempt) {
+        b.cells = QVector<int>(N*N, Water);
+        b.ships.clear();
+
+        bool complete = true;
+        for (const auto &s : fleet) {
+            bool placed = false;
+            for (int attempt = 0; attempt < 5000; ++attempt) {
+                if (tryPlaceShip(b, s.len, QString::fromUtf8(s.name), m_noTouchRule)) {
+                    placed = true;
+                    break;
+                }
+            }
+            if (!placed) {
+                complete = false;
                 break;
+            }
+        }
+        if (complete) return true;
+    }
+
+    b.cells = QVector<int>(N*N, Water);
+    b.ships.clear();
+    return false;
+}
+
+bool GameEngine::fleetSatisfiesNoTouchRule(const Board &b) const
+{
+    if (b.cells.size() != N*N) return false;
+
+    QVector<int> owner(N*N, -1);
+    for (int shipIndex = 0; shipIndex < b.ships.size(); ++shipIndex) {
+        const ShipInfo &ship = b.ships[shipIndex];
+        for (int cell : ship.cells) {
+            if (cell < 0 || cell >= N*N || owner[cell] != -1) return false;
+            owner[cell] = shipIndex;
         }
     }
+
+    for (int cell = 0; cell < owner.size(); ++cell) {
+        if (owner[cell] < 0) continue;
+        const int x = cell % N;
+        const int y = cell / N;
+        for (int ny = y - 1; ny <= y + 1; ++ny) {
+            for (int nx = x - 1; nx <= x + 1; ++nx) {
+                if (!inBounds(nx, ny)) continue;
+                const int other = owner[idx(nx, ny)];
+                if (other >= 0 && other != owner[cell]) return false;
+            }
+        }
+    }
+    return true;
 }
 
 bool GameEngine::tryPlaceShip(Board &b, int length, const QString &name, bool noTouchRule)
@@ -333,6 +433,7 @@ GameEngine::ShipInfo* GameEngine::shipContaining(Board &b, int cellIndex)
 
 bool GameEngine::resolveShot(Board &targetBoard, int x, int y, bool attackerIsPlayer, QString *outMessage, int *outSunkLen)
 {
+    if (outSunkLen) *outSunkLen = 0;
     if (!inBounds(x, y)) return false;
 
     int i = idx(x, y);
@@ -357,6 +458,7 @@ bool GameEngine::resolveShot(Board &targetBoard, int x, int y, bool attackerIsPl
         if (ship) {
             ship->hits += 1;
             if (ship->isSunk()) {
+                if (outSunkLen) *outSunkLen = ship->length;
                 for (int ci : ship->cells) targetBoard.cells[ci] = Sunk;
                 if (outMessage) *outMessage = attackerIsPlayer
                     ? QStringLiteral("Sunk %1").arg(ship->name)
@@ -401,24 +503,31 @@ void GameEngine::playerFire(int x, int y)
         return;
     }
 
+    stopElapsedTimer();
     m_enemyRevealed[i] = true;
     m_playerShots++;
     emit playerShotsChanged();
 
     QString msg;
-    bool applied = resolveShot(m_enemy, x, y, true, &msg, nullptr);
+    int sunkLen = 0;
+    bool applied = resolveShot(m_enemy, x, y, true, &msg, &sunkLen);
     if (!applied) {
         setStatus(m_statusText, msg);
         emitAllChanged();
         return;
     }
 
+    const int cellNow = m_enemy.cells[i];
+    const bool hit = (cellNow == Hit || cellNow == Sunk);
+    const bool sunk = (cellNow == Sunk);
+    emit playerShotResolved(hit, sunk);
+
     bool enemyAllSunk = true;
     for (int v : m_enemy.cells) { if (v == Ship) { enemyAllSunk = false; break; } }
     if (enemyAllSunk) {
         m_playerWon = true;
     m_gameOver = true;
-    m_elapsedTick.stop();
+    stopElapsedTimer();
     emit gameFinished(true, m_elapsedSeconds);
         m_playerTurn = false;
         setStatus(QStringLiteral("Game over"), msg);
@@ -426,6 +535,7 @@ void GameEngine::playerFire(int x, int y)
         emit statusChanged();
         emit setupModeChanged();
         emit setupChanged();
+        saveToDisk();
         return;
     }
 
@@ -697,7 +807,10 @@ void GameEngine::aiNotifyResult(const QPoint &p, bool hit, bool sunk, int sunkLe
 
 void GameEngine::aiTakeTurn()
 {
-    if (m_gameOver) return;
+    // Ignore delayed callbacks that belong to a game which has since ended or
+    // been replaced. A real AI turn is possible only during battle while the
+    // player is locked out.
+    if (m_gameOver || m_setupMode || m_playerTurn) return;
 
     QPoint shot = aiChooseShot();
     m_lastAiShotX = shot.x();
@@ -721,13 +834,14 @@ void GameEngine::aiTakeTurn()
     bool hit = (cellNow == Hit || cellNow == Sunk);
     bool sunk = (cellNow == Sunk);
     aiNotifyResult(shot, hit, sunk, sunkLen);
+    emit aiShotResolved(hit, sunk);
 
     bool playerAllSunk = true;
     for (int v : m_player.cells) { if (v == Ship) { playerAllSunk = false; break; } }
     if (playerAllSunk) {
         m_playerWon = false;
     m_gameOver = true;
-    m_elapsedTick.stop();
+    stopElapsedTimer();
     emit gameFinished(false, m_elapsedSeconds);
         m_playerTurn = false;
         setStatus(QStringLiteral("Game over"), msg);
@@ -735,6 +849,7 @@ void GameEngine::aiTakeTurn()
         emit statusChanged();
         emit setupModeChanged();
         emit setupChanged();
+        saveToDisk();
         return;
     }
 
@@ -742,6 +857,7 @@ void GameEngine::aiTakeTurn()
     setStatus(QStringLiteral("Your turn"), msg);
     emitAllChanged();
     saveToDisk();
+    startElapsedTimer();
 }
 
 void GameEngine::setStatus(const QString &status, const QString &action)
@@ -762,16 +878,31 @@ void GameEngine::emitAllChanged()
 int GameEngine::randomBounded(int upper) const
 {
     if (upper <= 0) return 0;
-    return qrand() % upper;
+    quint32 x = m_randomState;
+    x ^= x << 13;
+    x ^= x >> 17;
+    x ^= x << 5;
+    m_randomState = x;
+    return int(x % static_cast<quint32>(upper));
+}
+
+void GameEngine::seedRandom(quint32 seed)
+{
+    m_randomState = seed ? seed : 0x6d2b79f5u;
 }
 
 
 QString GameEngine::saveFilePath() const
 {
-    const QString dir = QDir::homePath() + QStringLiteral("/.local/share/harbour-navalbattle");
-    if (!QDir().mkpath(dir)) {
-    }
+    const QString dir = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+    QDir().mkpath(dir);
     return dir + QStringLiteral("/save.json");
+}
+
+QString GameEngine::legacySaveFilePath() const
+{
+    return QDir::homePath()
+        + QStringLiteral("/.local/share/harbour-navalbattle/save.json");
 }
 
 static QVariantList intVecToList(const QVector<int> &v)
@@ -875,7 +1006,9 @@ QVariantMap GameEngine::toVariantMap() const
     m.insert(QStringLiteral("lastAiShotX"), m_lastAiShotX);
     m.insert(QStringLiteral("lastAiShotY"), m_lastAiShotY);
 
-    m.insert(QStringLiteral("elapsedSeconds"), m_elapsedSeconds);
+    const qint64 elapsedMs = elapsedMilliseconds();
+    m.insert(QStringLiteral("elapsedMilliseconds"), elapsedMs);
+    m.insert(QStringLiteral("elapsedSeconds"), int(elapsedMs / 1000));
     m.insert(QStringLiteral("playerShots"), m_playerShots);
     m.insert(QStringLiteral("setupMode"), m_setupMode);
     m.insert(QStringLiteral("setupPlaced"), setupPlaced());
@@ -884,6 +1017,10 @@ QVariantMap GameEngine::toVariantMap() const
     // AI
     m.insert(QStringLiteral("aiTried"), boolVecToList(m_aiTried));
     m.insert(QStringLiteral("aiTargets"), pointsToList(m_aiTargets));
+    m.insert(QStringLiteral("aiHits"), pointsToList(m_aiHits));
+    m.insert(QStringLiteral("aiRemainingLens"), intVecToList(m_aiRemainingLens));
+    m.insert(QStringLiteral("aiDifficulty"), m_aiDifficulty);
+    m.insert(QStringLiteral("randomState"), static_cast<qulonglong>(m_randomState));
 
     return m;
 }
@@ -961,18 +1098,37 @@ bool GameEngine::fromVariantMap(const QVariantMap &m)
     m_aiTried = listToBoolVec(m.value(QStringLiteral("aiTried")).toList());
     if (m_aiTried.size() != N*N) return false;
     m_aiTargets = listToPoints(m.value(QStringLiteral("aiTargets")).toList());
+    m_aiHits = listToPoints(m.value(QStringLiteral("aiHits")).toList());
+    m_aiRemainingLens = m.contains(QStringLiteral("aiRemainingLens"))
+        ? listToIntVec(m.value(QStringLiteral("aiRemainingLens")).toList())
+        : aiDefaultRemainingLens();
+    m_aiDifficulty = qBound(0,
+        m.value(QStringLiteral("aiDifficulty"), m_aiDifficulty).toInt(), 2);
+
+    auto pointsAreValid = [this](const QVector<QPoint> &points) {
+        for (const QPoint &p : points) {
+            if (!inBounds(p.x(), p.y())) return false;
+        }
+        return true;
+    };
+    if (!pointsAreValid(m_aiTargets) || !pointsAreValid(m_aiHits)) return false;
+    if (m_aiRemainingLens.size() > 5) return false;
+    for (int length : m_aiRemainingLens) {
+        if (length < 2 || length > 5) return false;
+    }
+    seedRandom(static_cast<quint32>(
+        m.value(QStringLiteral("randomState"), 0x6d2b79f5u).toULongLong()));
 
     // Restore timer state
-    m_elapsedSeconds = m.value(QStringLiteral("elapsedSeconds"), 0).toInt();
+    m_elapsedTimerRunning = false;
+    m_elapsedTick.stop();
+    m_elapsedMillisecondsBase = m.contains(QStringLiteral("elapsedMilliseconds"))
+        ? qMax<qint64>(0, m.value(QStringLiteral("elapsedMilliseconds")).toLongLong())
+        : qint64(qMax(0, m.value(QStringLiteral("elapsedSeconds"), 0).toInt())) * 1000;
+    m_elapsedSeconds = int(m_elapsedMillisecondsBase / 1000);
     m_playerShots = m.value(QStringLiteral("playerShots"), 0).toInt();
     emit playerShotsChanged();
-    m_elapsedSecondsBase = m_elapsedSeconds;
-    m_elapsedTimer.restart();
-    if (!m_gameOver && !m_setupMode) {
-        if (!m_elapsedTick.isActive()) m_elapsedTick.start();
-    } else {
-        m_elapsedTick.stop();
-    }
+    startElapsedTimer();
     emit elapsedSecondsChanged();
 
     return true;
@@ -984,6 +1140,7 @@ bool GameEngine::saveToDisk()
         return false;
     }
 
+    updateElapsedSeconds();
     const QString path = saveFilePath();
     QDir().mkpath(QFileInfo(path).absolutePath());
 
@@ -1007,6 +1164,24 @@ bool GameEngine::saveToDisk()
 bool GameEngine::loadFromDisk()
 {
     const QString path = saveFilePath();
+    if (loadFromPath(path)) {
+        return true;
+    }
+
+    // One-time compatibility with releases that used a hard-coded home path.
+    // Sailjail may make that old location unavailable; failure is harmless.
+    const QString legacyPath = legacySaveFilePath();
+    if (legacyPath != path && loadFromPath(legacyPath)) {
+        saveToDisk();
+        return true;
+    }
+
+    m_booting = false;
+    return false;
+}
+
+bool GameEngine::loadFromPath(const QString &path)
+{
     QFile f(path);
     if (!f.exists()) return false;
 
@@ -1028,8 +1203,16 @@ bool GameEngine::loadFromDisk()
     const bool ok = fromVariantMap(m);
     m_booting = false;
     if (!ok) {
-        clearSavedGame();
+        if (path == saveFilePath()) {
+            QFile::remove(path);
+        }
         return false;
+    }
+
+    // If the app was stopped after the player fired but before the delayed AI
+    // move ran, resume that pending turn instead of leaving the board locked.
+    if (!m_gameOver && !m_setupMode && !m_playerTurn) {
+        QTimer::singleShot(m_aiDelayMs, this, [this]() { aiTakeTurn(); });
     }
     return true;
 }
@@ -1238,12 +1421,14 @@ void GameEngine::autoPlacePlayerFleet()
         m_player.cells.fill(Water);
     m_player.ships.clear();
 
-    placeFleetRandom(m_player);
+    const bool placed = placeFleetRandom(m_player);
 
-    for (int i = 0; i < m_setupPlaced.size(); ++i) m_setupPlaced[i] = true;
+    for (int i = 0; i < m_setupPlaced.size(); ++i) m_setupPlaced[i] = placed;
     // Remain in setup mode; player must press "Start battle".
     m_statusText = QStringLiteral("Place your ships");
-    m_lastAction = QStringLiteral("Fleet auto-placed");
+    m_lastAction = placed
+        ? QStringLiteral("Fleet auto-placed")
+        : QStringLiteral("Fleet placement failed");
 
     emit setupChanged();
     emitAllChanged();
@@ -1262,14 +1447,15 @@ void GameEngine::startBattle()
         }
     }
 
-    // Start battle timer now
-    m_elapsedSecondsBase = 0;
+    // Start the fair ranked clock only after setup has ended.
+    stopElapsedTimer();
+    m_elapsedMillisecondsBase = 0;
     m_elapsedSeconds = 0;
-    m_elapsedTimer.restart();
-    if (!m_elapsedTick.isActive()) m_elapsedTick.start();
     emit elapsedSecondsChanged();
 
     m_setupMode = false;
+    m_playerTurn = true;
+    startElapsedTimer();
     m_statusText = QStringLiteral("Your turn");
     m_lastAction = QStringLiteral("Battle started");
     emit setupModeChanged();

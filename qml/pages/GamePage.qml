@@ -17,6 +17,8 @@
     along with the harbour-navalbattle. If not, see <http://www.gnu.org/licenses/>.
 */
 import QtQuick 2.0
+import QtMultimedia 5.6
+import QtFeedback 5.0
 import Sailfish.Silica 1.0
 
 import "../components"
@@ -31,6 +33,57 @@ Page {
     }
 
     id: page
+
+    Audio {
+        id: waterSound
+        audioRole: Audio.GameRole
+        autoLoad: true
+        volume: 1.0
+        Component.onCompleted: source = Qt.resolvedUrl("../assets/sounds/shot-water.wav")
+        onError: console.warn("Water sound playback failed:", errorString)
+    }
+
+    ThemeEffect {
+        id: waterHaptic
+        effect: ThemeEffect.PressWeak
+    }
+
+    ThemeEffect {
+        id: shipHaptic
+        effect: ThemeEffect.PressStrong
+    }
+
+    Audio {
+        id: shipSound
+        audioRole: Audio.GameRole
+        autoLoad: true
+        volume: 1.0
+        Component.onCompleted: source = Qt.resolvedUrl("../assets/sounds/shot-ship.wav")
+        onError: console.warn("Ship sound playback failed:", errorString)
+    }
+
+    function requestNewGame() {
+        Remorse.popupAction(page, qsTr("New game started"), function() {
+            if (engine) engine.newGame()
+        })
+    }
+
+    function shotFeedback(hit, playerShot) {
+        if (settings && settings.soundEffects) {
+            var sound = hit ? shipSound : waterSound
+            sound.stop()
+            sound.seek(0)
+            sound.play()
+        }
+        if (playerShot && settings && settings.hapticFeedback)
+            (hit ? shipHaptic : waterHaptic).play()
+    }
+
+    Connections {
+        target: engine
+        onPlayerShotResolved: page.shotFeedback(hit, true)
+        onAiShotResolved: page.shotFeedback(hit, false)
+    }
 
     // Provided as context properties from C++ (main.cpp)
     // - engine (GameEngine)
@@ -60,9 +113,18 @@ Page {
     }
 
     function fleetTitleText() {
-        var n = playerNameSafe();
-        // Apostrophe escaping for QML string literal
-        return qsTr("%1's fleet").arg(n);
+        if (!settings || !settings.playerName || settings.playerName.trim().length === 0)
+            return qsTr("Your fleet")
+        return qsTr("%1's fleet").arg(settings.playerName.trim());
+    }
+
+    function translatedShipName(name) {
+        if (name === "Carrier") return qsTr("Carrier")
+        if (name === "Battleship") return qsTr("Battleship")
+        if (name === "Cruiser") return qsTr("Cruiser")
+        if (name === "Submarine") return qsTr("Submarine")
+        if (name === "Destroyer") return qsTr("Destroyer")
+        return name
     }
 
     function fmtTime(sec) {
@@ -84,32 +146,51 @@ Page {
         if (!engine) return "";
         var a = engine.lastAction || "";
         if (a.length === 0) return "";
-
-        // Setup-phase messages are shown inside the setup panel.
         if (engine.setupMode) return "";
 
-        // Game over: keep the engine message (overlay already says win/lose).
-        if (engine.gameOver) return a;
-
-        // Player just fired -> we are in AI turn now
-        if (!engine.playerTurn) {
-            var c1 = coordText(engine.lastPlayerShotX, engine.lastPlayerShotY);
-            if (a === "Miss") return playerNameSafe() + " fired at " + c1 + " - Miss";
-            if (a.indexOf("Hit ") === 0) return playerNameSafe() + " fired at " + c1 + " - Hit " + a.substring(4);
-            if (a.indexOf("Sunk ") === 0) return playerNameSafe() + " fired at " + c1 + " - Sunk " + a.substring(5);
-            return a;
-        }
-
-        // AI just fired -> it is our turn
+        var c1 = coordText(engine.lastPlayerShotX, engine.lastPlayerShotY);
         var c2 = coordText(engine.lastAiShotX, engine.lastAiShotY);
-        if (a === "AI missed") return "AI fired at " + c2 + " - Miss";
+        if (a === "Miss")
+            return qsTr("%1 fired at %2 — miss").arg(playerNameSafe()).arg(c1)
+        if (a.indexOf("Hit ") === 0)
+            return qsTr("%1 fired at %2 — hit %3").arg(playerNameSafe()).arg(c1).arg(translatedShipName(a.substring(4)))
+        if (a.indexOf("Sunk ") === 0)
+            return qsTr("%1 fired at %2 — sank %3").arg(playerNameSafe()).arg(c1).arg(translatedShipName(a.substring(5)))
+        if (a === "AI missed")
+            return qsTr("AI fired at %1 — miss").arg(c2)
 
         var hitPrefix = "AI hit your ";
-        if (a.indexOf(hitPrefix) === 0) return "AI fired at " + c2 + " - Hit your " + a.substring(hitPrefix.length);
+        if (a.indexOf(hitPrefix) === 0)
+            return qsTr("AI fired at %1 — hit your %2").arg(c2).arg(translatedShipName(a.substring(hitPrefix.length)))
 
         var sunkPrefix = "AI sunk your ";
-        if (a.indexOf(sunkPrefix) === 0) return "AI fired at " + c2 + " - Sunk your " + a.substring(sunkPrefix.length);
-        return a;
+        if (a.indexOf(sunkPrefix) === 0)
+            return qsTr("AI fired at %1 — sank your %2").arg(c2).arg(translatedShipName(a.substring(sunkPrefix.length)))
+        if (a === "Already fired there" || a === "Already shot there")
+            return qsTr("You already fired there")
+        if (a === "Battle started") return qsTr("Battle started")
+        if (a === "Cannot reshuffle after shooting has started")
+            return qsTr("The fleet cannot be reshuffled after shooting has started")
+        if (a === "Your fleet reshuffled") return qsTr("Your fleet was reshuffled")
+        return a
+    }
+
+    function formatSetupAction() {
+        if (!engine) return ""
+        var a = engine.lastAction || ""
+        if (a === "Tap your board to place the selected ship")
+            return qsTr("Tap your board to place the selected ship")
+        if (a === "Can't place ship here") return qsTr("Can't place ship here")
+        if (a === "Fleet auto-placed") return qsTr("Fleet auto-placed")
+        if (a === "Fleet placement failed") return qsTr("Fleet placement failed")
+        if (a === "Fleet cleared for no-touch rule")
+            return qsTr("Fleet cleared because ships were touching")
+        if (a === "Place all ships first") return qsTr("Place all ships first")
+        if (a.indexOf("Placed ") === 0)
+            return qsTr("Placed %1").arg(translatedShipName(a.substring(7)))
+        if (a.indexOf("Undid ") === 0)
+            return qsTr("Removed %1").arg(translatedShipName(a.substring(6)))
+        return a
     }
 
     function allPlaced() {
@@ -138,8 +219,6 @@ Page {
         if (engine && engine.setupMode) engine.rebuildSetupHistory()
         if (engine && settings) {
             engine.aiDelayMs = settings.aiDelayMs;
-            engine.aiThinkingHoldMs = settings.thinkingHoldMs;
-            engine.hitMissHoldMs = settings.hitMissHoldMs;
             engine.aiDifficulty = settings.aiDifficulty;
         }
     }
@@ -147,8 +226,6 @@ Page {
     onStatusChanged: {
         if (status === PageStatus.Activating && engine && settings) {
             engine.aiDelayMs = settings.aiDelayMs;
-            engine.aiThinkingHoldMs = settings.thinkingHoldMs;
-            engine.hitMissHoldMs = settings.hitMissHoldMs;
             engine.aiDifficulty = settings.aiDifficulty;
         }
     }
@@ -266,12 +343,13 @@ Page {
                     }
 
                     Label {
-                        width: parent.width
+                        x: Theme.horizontalPageMargin
+                        width: parent.width - 2 * Theme.horizontalPageMargin
                         font.pixelSize: Theme.fontSizeSmall
                         color: Theme.secondaryColor
                         horizontalAlignment: Text.AlignHCenter
-                        truncationMode: TruncationMode.Fade
-                        text: engine ? engine.lastAction : ""
+                        wrapMode: Text.WordWrap
+                        text: formatSetupAction()
                     }
                     // Two-row layout for setup actions (centered block)
                     Column {
@@ -412,22 +490,12 @@ Page {
         PullDownMenu {
             MenuItem {
                 text: qsTr("New game")
-                onClicked: if (engine) engine.newGame();
+                onClicked: page.requestNewGame()
             }
 
             MenuItem {
                 text: qsTr("Settings")
                 onClicked: pageStack.push(Qt.resolvedUrl("SettingsPage.qml"))
-            }
-
-            MenuItem {
-                text: qsTr("Best times")
-                onClicked: pageStack.push(Qt.resolvedUrl("BestTimesPage.qml"))
-            }
-
-            MenuItem {
-                text: qsTr("Game Rules")
-                onClicked: pageStack.push(Qt.resolvedUrl("RulesPage.qml"))
             }
 
             MenuItem {
@@ -498,7 +566,9 @@ Page {
                             horizontalAlignment: Text.AlignHCenter
                             color: Theme.rgba(Theme.primaryColor, 0.85)
                             font.pixelSize: Theme.fontSizeExtraLarge
-                            text: (engine && engine.playerWon) ? (playerNameSafe() + qsTr(" won!")) : (playerNameSafe() + qsTr(" lost!"))
+                            text: (engine && engine.playerWon)
+                                  ? qsTr("%1 won!").arg(playerNameSafe())
+                                  : qsTr("%1 lost!").arg(playerNameSafe())
                         }
 
                         Label {
@@ -521,7 +591,7 @@ Page {
                         Button {
                             width: parent.width
                             text: qsTr("New game")
-                            onClicked: if (engine) engine.newGame()
+                            onClicked: page.requestNewGame()
                         }
                     }
                 }

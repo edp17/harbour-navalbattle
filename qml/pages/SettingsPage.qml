@@ -27,6 +27,13 @@ Page {
         anchors.fill: parent
         contentHeight: column.height + Theme.paddingLarge
 
+        PullDownMenu {
+            MenuItem {
+                text: qsTr("Best times")
+                onClicked: pageStack.push(Qt.resolvedUrl("BestTimesPage.qml"))
+            }
+        }
+
         Column {
             id: column
             width: parent.width
@@ -48,10 +55,10 @@ Page {
                 onTextChanged: settings.playerName = text
             }
 
-            SectionHeader { text: "Board" }
+            SectionHeader { text: qsTr("Board") }
 
             TextSwitch {
-                text: "Show coordinates (A–L / 1–12)"
+                text: qsTr("Show coordinates (A–L / 1–12)")
                 checked: settings ? settings.showCoordinates : true
                 onCheckedChanged: if (settings) settings.showCoordinates = checked
             }
@@ -65,8 +72,8 @@ Page {
                 stepSize: 1
                 value: (settings && settings.cellSizePx !== undefined) ? settings.cellSizePx : 0
                 label: (Math.round(value) === 0)
-                       ? "Cell size: Auto"
-                       : ("Cell size: " + Math.round(value) + " px")
+                       ? qsTr("Cell size: Auto")
+                       : qsTr("Cell size: %1 px").arg(Math.round(value))
                 onValueChanged: {
                     if (settings && settings.setCellSizePx) {
                         settings.setCellSizePx(Math.round(value))
@@ -78,17 +85,17 @@ Page {
                 width: parent.width
                 wrapMode: Text.WordWrap
                 color: Theme.rgba(Theme.primaryColor, 0.65)
-                text: "Set to Auto (0) to let the app fit both boards automatically."
+                text: qsTr("Set to Auto (0) to let the app fit both boards automatically.")
                 font.pixelSize: Theme.fontSizeSmall
             }
 
-            SectionHeader { text: "AI" }
+            SectionHeader { text: qsTr("AI") }
 
             ComboBox {
                 width: parent.width
                 label: qsTr("Difficulty")
                 enabled: !engine || engine.setupMode || engine.gameOver
-                description: qsTr("Easy: random shots. Medium: basic target mode. Hard: target + parity hunt.")
+                description: qsTr("Easy: checkerboard hunt. Medium: improved targeting. Hard: probability-based hunt.")
                 currentIndex: settings ? settings.aiDifficulty : 1
                 menu: ContextMenu {
                     MenuItem { text: qsTr("Easy") }
@@ -104,7 +111,7 @@ Page {
             ComboBox {
                 label: qsTr("Pace")
                 enabled: !engine || engine.setupMode || engine.gameOver
-                description: qsTr("Controls AI speed and message timing")
+                description: qsTr("Controls how long the AI waits before firing")
                 menu: ContextMenu {
                     MenuItem { text: qsTr("Slow") }
                     MenuItem { text: qsTr("Normal") }
@@ -125,7 +132,7 @@ Page {
                 width: parent.width
                 wrapMode: Text.WordWrap
                 color: Theme.rgba(Theme.primaryColor, 0.65)
-                text: 'The AI delay makes the "AI is thinking…" state visible and can reduce accidental rapid taps.'
+                text: qsTr("The selected pace controls how long the AI thinking state remains visible.")
                 font.pixelSize: Theme.fontSizeSmall
             }
 
@@ -144,7 +151,7 @@ Page {
                 onCheckedChanged: if (settings) settings.showThinkingPopup = checked
             }
 
-                        TextSwitch {
+            TextSwitch {
                 text: qsTr("Show game over overlay")
                 description: qsTr("Show the win/lose overlay at end of the game")
                 checked: settings ? settings.showGameOverOverlay : true
@@ -167,6 +174,22 @@ Page {
                 description: qsTr("Apply a subtle tint to enemy ship images when they are shown.")
                 checked: settings ? settings.tintEnemyShips : false
                 onCheckedChanged: if (settings) settings.tintEnemyShips = checked
+            }
+
+            SectionHeader { text: qsTr("Feedback") }
+
+            TextSwitch {
+                text: qsTr("Haptic feedback")
+                description: qsTr("Vibrate when your shot reaches the target.")
+                checked: settings ? settings.hapticFeedback : true
+                onCheckedChanged: if (settings) settings.hapticFeedback = checked
+            }
+
+            TextSwitch {
+                text: qsTr("Shot sounds")
+                description: qsTr("Play different sounds for water and ship hits.")
+                checked: settings ? settings.soundEffects : true
+                onCheckedChanged: if (settings) settings.soundEffects = checked
             }
         }
     }

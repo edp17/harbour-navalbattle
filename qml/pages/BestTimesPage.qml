@@ -67,6 +67,11 @@ function secOf(e) {
         return "  (" + qsTr("Pace") + ": " + paceLabel(p) + ")"
     }
 
+    function shotsSuffix(e) {
+        var shots = shotsOf(e)
+        return shots > 0 ? "  (" + qsTr("%1 shots").arg(shots) + ")" : ""
+    }
+
     function timesForDifficulty(d) {
         var src = (settings && settings.bestTimes) ? settings.bestTimes : []
         var out = []
@@ -80,11 +85,31 @@ function secOf(e) {
         return out
     }
 
-    readonly property var easyTimes: timesForDifficulty(0)
-    readonly property var mediumTimes: timesForDifficulty(1)
-    readonly property var hardTimes: timesForDifficulty(2)
+    property var easyTimes: []
+    property var mediumTimes: []
+    property var hardTimes: []
 
     readonly property bool hasAny: (easyTimes.length + mediumTimes.length + hardTimes.length) > 0
+
+    function refreshTimes() {
+        easyTimes = timesForDifficulty(0)
+        mediumTimes = timesForDifficulty(1)
+        hardTimes = timesForDifficulty(2)
+    }
+
+    function requestClearBestTimes() {
+        if (!settings || !hasAny) return
+        Remorse.popupAction(page, qsTr("Best times cleared"), function() {
+            if (settings) settings.clearBestTimes()
+        })
+    }
+
+    Component.onCompleted: refreshTimes()
+
+    Connections {
+        target: settings
+        onBestTimesChanged: page.refreshTimes()
+    }
 
     SilicaFlickable {
         anchors.fill: parent
@@ -93,7 +118,8 @@ function secOf(e) {
         PullDownMenu {
             MenuItem {
                 text: qsTr("Clear best times")
-                onClicked: if (settings) settings.clearBestTimes()
+                enabled: page.hasAny
+                onClicked: page.requestClearBestTimes()
             }
         }
 
@@ -113,12 +139,6 @@ function secOf(e) {
                 text: qsTr("Beat the enemy fleet.")
             }
 
-            // Sections
-            function section(title, model) {
-                // dummy
-                return null
-            }
-
             Column {
                 width: parent.width
                 visible: easyTimes.length > 0
@@ -130,7 +150,7 @@ function secOf(e) {
                         x: Theme.horizontalPageMargin
                         width: parent.width - 2*Theme.horizontalPageMargin
                         truncationMode: TruncationMode.Fade
-                        text: "#" + (index + 1) + ".  " + whoOf(modelData) + "  " + fmt(secOf(modelData)) + (shotsOf(modelData) > 0 ? "  (#shots: " + shotsOf(modelData) + ")" : "") + paceSuffix(modelData)
+                        text: "#" + (index + 1) + ".  " + whoOf(modelData) + "  " + fmt(secOf(modelData)) + shotsSuffix(modelData) + paceSuffix(modelData)
                     }
                 }
                 Item { width: 1; height: Theme.paddingMedium }
@@ -147,7 +167,7 @@ function secOf(e) {
                         x: Theme.horizontalPageMargin
                         width: parent.width - 2*Theme.horizontalPageMargin
                         truncationMode: TruncationMode.Fade
-                        text: "#" + (index + 1) + ".  " + whoOf(modelData) + "  " + fmt(secOf(modelData)) + (shotsOf(modelData) > 0 ? "  (#shots: " + shotsOf(modelData) + ")" : "") + paceSuffix(modelData)
+                        text: "#" + (index + 1) + ".  " + whoOf(modelData) + "  " + fmt(secOf(modelData)) + shotsSuffix(modelData) + paceSuffix(modelData)
                     }
                 }
                 Item { width: 1; height: Theme.paddingMedium }
@@ -164,7 +184,7 @@ function secOf(e) {
                         x: Theme.horizontalPageMargin
                         width: parent.width - 2*Theme.horizontalPageMargin
                         truncationMode: TruncationMode.Fade
-                        text: "#" + (index + 1) + ".  " + whoOf(modelData) + "  " + fmt(secOf(modelData)) + (shotsOf(modelData) > 0 ? "  (#shots: " + shotsOf(modelData) + ")" : "") + paceSuffix(modelData)
+                        text: "#" + (index + 1) + ".  " + whoOf(modelData) + "  " + fmt(secOf(modelData)) + shotsSuffix(modelData) + paceSuffix(modelData)
                     }
                 }
                 Item { width: 1; height: Theme.paddingMedium }

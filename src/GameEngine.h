@@ -26,7 +26,7 @@ class GameEngine : public QObject
 
     // Manual fleet placement (setup mode)
     Q_PROPERTY(bool setupMode READ setupMode NOTIFY setupModeChanged)
-Q_PROPERTY(bool noTouchRule READ noTouchRule WRITE setNoTouchRule NOTIFY setupChanged)
+    Q_PROPERTY(bool noTouchRule READ noTouchRule WRITE setNoTouchRule NOTIFY setupChanged)
     Q_PROPERTY(QVariantList setupPlaced READ setupPlaced NOTIFY setupChanged)
     Q_PROPERTY(int setupSelectedIndex READ setupSelectedIndex WRITE setSetupSelectedIndex NOTIFY setupChanged)
     Q_PROPERTY(bool setupHorizontal READ setupHorizontal WRITE setSetupHorizontal NOTIFY setupChanged)
@@ -37,7 +37,7 @@ Q_PROPERTY(bool noTouchRule READ noTouchRule WRITE setNoTouchRule NOTIFY setupCh
     Q_PROPERTY(int lastAiShotX READ lastAiShotX NOTIFY statusChanged)
     Q_PROPERTY(int lastAiShotY READ lastAiShotY NOTIFY statusChanged)
     Q_PROPERTY(int aiDelayMs READ aiDelayMs WRITE setAiDelayMs NOTIFY statusChanged)
-Q_PROPERTY(int aiDifficulty READ aiDifficulty WRITE setAiDifficulty NOTIFY statusChanged)
+    Q_PROPERTY(int aiDifficulty READ aiDifficulty WRITE setAiDifficulty NOTIFY statusChanged)
 
 public:
     explicit GameEngine(QObject *parent = nullptr);
@@ -85,8 +85,8 @@ public:
     QString statusText() const { return m_statusText; }
     QString lastAction() const { return m_lastAction; }
     bool gameOver() const { return m_gameOver; }
-        int playerShots() const { return m_playerShots; }
-int elapsedSeconds() const { return m_elapsedSeconds; }
+    int playerShots() const { return m_playerShots; }
+    int elapsedSeconds() const { return m_elapsedSeconds; }
     bool playerWon() const { return m_playerWon; }
     bool revealEnemyFleet() const { return m_revealEnemyFleet; }
     bool playerTurn() const { return m_playerTurn; }
@@ -96,7 +96,7 @@ int elapsedSeconds() const { return m_elapsedSeconds; }
     int lastAiShotY() const { return m_lastAiShotY; }
     int aiDelayMs() const { return m_aiDelayMs; }
     void setAiDelayMs(int ms) { m_aiDelayMs = (ms < 0 ? 0 : ms); emit statusChanged(); }
-int aiDifficulty() const { return m_aiDifficulty; }
+    int aiDifficulty() const { return m_aiDifficulty; }
     bool setupMode() const { return m_setupMode; }
     bool noTouchRule() const;
     void setNoTouchRule(bool v);
@@ -106,7 +106,15 @@ int aiDifficulty() const { return m_aiDifficulty; }
     bool setupHorizontal() const { return m_setupHorizontal; }
     int setupHistoryCount() const { return m_setupHistory.size(); }
     void setSetupHorizontal(bool h);
-void setAiDifficulty(int d) { if (d < 0) d = 0; if (d > 2) d = 2; m_aiDifficulty = d; aiReset(); emit statusChanged(); }
+    void setAiDifficulty(int d) {
+        if (d < 0) d = 0;
+        if (d > 2) d = 2;
+        if (m_aiDifficulty == d) return;
+        m_aiDifficulty = d;
+        aiReset();
+        emit statusChanged();
+    }
+    void setApplicationActive(bool active);
 
     // Debug helper (goes to debug.log via installed message handler)
     Q_INVOKABLE void debug(const QString &msg);
@@ -119,22 +127,30 @@ signals:
     void setupChanged();
     void playerWonChanged();
     void gameOverChanged();
-        void playerShotsChanged();
-void elapsedSecondsChanged();
+    void playerShotsChanged();
+    void elapsedSecondsChanged();
     void revealEnemyFleetChanged();
     void boardsChanged();
     void statusChanged();
     void gameFinished(bool playerWon, int elapsedSeconds);
+    void playerShotResolved(bool hit, bool sunk);
+    void aiShotResolved(bool hit, bool sunk);
 
 private:
     void initSetupDefaults();
 
     // Timer
+    qint64 elapsedMilliseconds() const;
+    void updateElapsedSeconds();
+    void startElapsedTimer();
+    void stopElapsedTimer();
     QElapsedTimer m_elapsedTimer;
     QTimer m_elapsedTick;
-        int m_playerShots = 0;
-int m_elapsedSeconds = 0;
-    int m_elapsedSecondsBase = 0;
+    int m_playerShots = 0;
+    int m_elapsedSeconds = 0;
+    qint64 m_elapsedMillisecondsBase = 0;
+    bool m_elapsedTimerRunning = false;
+    bool m_applicationActive = true;
     static constexpr int N = 12;
     static int idx(int x, int y) { return y * N + x; }
     bool inBounds(int x, int y) const { return x >= 0 && x < N && y >= 0 && y < N; }
@@ -153,7 +169,8 @@ int m_elapsedSeconds = 0;
     };
 
     void resetBoards();
-    void placeFleetRandom(Board &b);
+    bool placeFleetRandom(Board &b);
+    bool fleetSatisfiesNoTouchRule(const Board &b) const;
     bool tryPlaceShip(Board &b, int length, const QString &name, bool noTouchRule);
     bool canPlaceAt(const Board &b, int x, int y, int length, bool horizontal, bool noTouchRule) const;
     void applyShip(Board &b, int x, int y, int length, bool horizontal, const QString &name);
@@ -169,9 +186,12 @@ int m_elapsedSeconds = 0;
     void setStatus(const QString &status, const QString &action);
     void emitAllChanged();
     QString saveFilePath() const;
+    QString legacySaveFilePath() const;
+    bool loadFromPath(const QString &path);
     QVariantMap toVariantMap() const;
     bool fromVariantMap(const QVariantMap &m);
     int randomBounded(int upper) const;
+    void seedRandom(quint32 seed);
     void scheduleSave();
 
 private:
@@ -218,5 +238,8 @@ private:
     QVector<QPoint> m_aiTargets;
     QVector<QPoint> m_aiHits; // hits on current unsunk ship (Hard)
     QVector<int> m_aiRemainingLens;
+    mutable quint32 m_randomState = 0x6d2b79f5u;
     bool m_booting = true;
+
+    friend class GameEngineTestAccess;
 };

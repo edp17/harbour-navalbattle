@@ -4,6 +4,9 @@ X-Nemo-Application-Type=Silica
 Icon=harbour-navalbattle
 Exec=harbour-navalbattle
 Name=Naval Battle
+Name[hu]=Torpedó
 
 [X-Sailjail]
-Sandboxing=Disabled
+Permissions=Audio
+OrganizationName=harbour
+ApplicationName=harbour-navalbattle

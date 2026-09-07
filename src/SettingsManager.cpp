@@ -1,23 +1,95 @@
 #include "SettingsManager.h"
 
 #include <algorithm>
+#include <QDir>
+#include <QFile>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QSaveFile>
+#include <QStandardPaths>
+
+namespace {
+QString settingsFilePath()
+{
+    const QString directory = QStandardPaths::writableLocation(
+        QStandardPaths::AppConfigLocation);
+    QDir().mkpath(directory);
+    return QDir(directory).filePath(QStringLiteral("settings.ini"));
+}
+
+QString bestTimesFilePath()
+{
+    const QString directory = QStandardPaths::writableLocation(
+        QStandardPaths::AppDataLocation);
+    QDir().mkpath(directory);
+    return QDir(directory).filePath(QStringLiteral("best-times.json"));
+}
+}
 
 SettingsManager::SettingsManager(QObject *parent)
     : QObject(parent)
-    , m_settings(QStringLiteral("harbour"), QStringLiteral("harbour-navalbattle"))
+    , m_settings(settingsFilePath(), QSettings::IniFormat)
 {
+    // QSettings' default single-file location is outside the directory granted
+    // by Sailjail. Import anything still readable, then use the explicit file.
+    if (!m_settings.value(QStringLiteral("explicitSettingsFileMigrated"), false).toBool()) {
+        QSettings legacy(QStringLiteral("harbour"),
+                         QStringLiteral("harbour-navalbattle"));
+        const QStringList keys = legacy.allKeys();
+        for (const QString &key : keys) {
+            if (!m_settings.contains(key)) m_settings.setValue(key, legacy.value(key));
+        }
+        m_settings.setValue(QStringLiteral("explicitSettingsFileMigrated"), true);
+        m_settings.sync();
+    }
+
     // Phase 22 migration: first run on 12×12 discards old best times.
     // (This build is permanently 12×12; only do this once.)
     if (!m_settings.value(QStringLiteral("phase22_migrated_12x12"), false).toBool()) {
         m_settings.remove(QStringLiteral("bestTimes"));
+        m_settings.remove(QStringLiteral("bestTimesJson"));
         m_settings.setValue(QStringLiteral("phase22_migrated_12x12"), true);
     }
 
+    // RC3 changes ranked time from wall-clock battle duration to player-turn
+    // thinking time. Older records cannot be compared fairly, so reset once.
+    if (!m_settings.value(QStringLiteral("fairPlayerClockMigrated"), false).toBool()) {
+        m_settings.remove(QStringLiteral("bestTimes"));
+        m_settings.remove(QStringLiteral("bestTimesJson"));
+        m_settings.setValue(QStringLiteral("fairPlayerClockMigrated"), true);
+    }
+
+    m_settings.sync();
+    loadBestTimes();
 }
 
 bool SettingsManager::showCoordinates() const
 {
     return m_settings.value(QStringLiteral("showCoordinates"), true).toBool();
+}
+
+bool SettingsManager::hapticFeedback() const
+{
+    return m_settings.value(QStringLiteral("hapticFeedback"), true).toBool();
+}
+
+void SettingsManager::setHapticFeedback(bool v)
+{
+    if (hapticFeedback() == v) return;
+    m_settings.setValue(QStringLiteral("hapticFeedback"), v);
+    emit changed();
+}
+
+bool SettingsManager::soundEffects() const
+{
+    return m_settings.value(QStringLiteral("soundEffects"), true).toBool();
+}
+
+void SettingsManager::setSoundEffects(bool v)
+{
+    if (soundEffects() == v) return;
+    m_settings.setValue(QStringLiteral("soundEffects"), v);
+    emit changed();
 }
 
 void SettingsManager::setShowCoordinates(bool v)
@@ -214,45 +286,93 @@ void SettingsManager::setPlayerName(const QString &name)
 }
 
 
-QVariantList SettingsManager::bestTimes()
+QVariantList SettingsManager::bestTimes() const
 {
-    QVariantList list = m_settings.value(QStringLiteral("bestTimes"), QVariantList()).toList();
-    // Migrate legacy format: list of ints -> list of {name, seconds}
-    bool migrated = false;
-    for (int i = 0; i < list.size(); ++i) {
-        const QVariant &v = list.at(i);
-        if (v.type() == QVariant::Int || v.type() == QVariant::LongLong) {
-            QVariantMap m;
-            m.insert(QStringLiteral("name"), QString());
-            m.insert(QStringLiteral("seconds"), v.toInt());
-            m.insert(QStringLiteral("difficulty"), 1);
-            list[i] = m;
-            migrated = true;
+    return m_bestTimes;
+}
+
+void SettingsManager::loadBestTimes()
+{
+    bool loadedFromFile = false;
+    QFile file(bestTimesFilePath());
+    if (file.open(QIODevice::ReadOnly)) {
+        QJsonParseError error;
+        const QJsonDocument document = QJsonDocument::fromJson(file.readAll(), &error);
+        if (error.error == QJsonParseError::NoError && document.isArray()) {
+            m_bestTimes = document.array().toVariantList();
+            loadedFromFile = true;
         }
-    }
-    if (migrated) {
-        m_settings.setValue(QStringLiteral("bestTimes"), list);
     }
 
-    // Ensure every entry has difficulty + pace.
-    // pace: 0=Slow, 1=Normal, 2=Fast, -1=Unknown/legacy
-    bool fixed = false;
-    for (int i = 0; i < list.size(); ++i) {
-        if (list.at(i).type() != QVariant::Map) continue;
-        QVariantMap m = list.at(i).toMap();
-        if (!m.contains(QStringLiteral("difficulty"))) {
-            m.insert(QStringLiteral("difficulty"), 1);
-            fixed = true;
+    // Import the RC2/RC3 QSettings representation when no data file exists.
+    bool loadedSettingsJson = false;
+    const QVariant storedJson = m_settings.value(QStringLiteral("bestTimesJson"));
+    const QByteArray bytes = storedJson.type() == QVariant::ByteArray
+        ? storedJson.toByteArray() : storedJson.toString().toUtf8();
+    if (!loadedFromFile && !bytes.isEmpty()) {
+        QJsonParseError error;
+        const QJsonDocument document = QJsonDocument::fromJson(bytes, &error);
+        if (error.error == QJsonParseError::NoError && document.isArray()) {
+            m_bestTimes = document.array().toVariantList();
+            loadedSettingsJson = true;
         }
-        if (!m.contains(QStringLiteral("pace"))) {
-            // Old entries didn't capture pace; mark as unknown.
-            m.insert(QStringLiteral("pace"), -1);
-            fixed = true;
-        }
-        if (fixed) list[i] = m;
     }
-    if (fixed) m_settings.setValue(QStringLiteral("bestTimes"), list);
-    return list;
+
+    // Import records written by version 1.0 and early sandbox builds.
+    if (!loadedFromFile && !loadedSettingsJson) {
+        m_bestTimes = m_settings.value(QStringLiteral("bestTimes"), QVariantList()).toList();
+    }
+
+    QVariantList normalized;
+    normalized.reserve(m_bestTimes.size());
+    for (const QVariant &value : m_bestTimes) {
+        QVariantMap entry;
+        if (value.type() == QVariant::Int || value.type() == QVariant::LongLong) {
+            QVariantMap m;
+            m.insert(QStringLiteral("name"), QString());
+            m.insert(QStringLiteral("seconds"), value.toInt());
+            m.insert(QStringLiteral("difficulty"), 1);
+            entry = m;
+        } else if (value.type() == QVariant::Map) {
+            entry = value.toMap();
+        } else {
+            continue;
+        }
+
+        if (!entry.contains(QStringLiteral("difficulty"))) {
+            entry.insert(QStringLiteral("difficulty"), 1);
+        }
+        if (!entry.contains(QStringLiteral("pace"))) {
+            entry.insert(QStringLiteral("pace"), -1);
+        }
+        normalized.append(entry);
+    }
+    m_bestTimes = normalized;
+
+    if (!loadedFromFile || m_settings.contains(QStringLiteral("bestTimes"))
+            || m_settings.contains(QStringLiteral("bestTimesJson"))) {
+        saveBestTimes();
+    }
+}
+
+void SettingsManager::saveBestTimes()
+{
+    const QJsonDocument document(QJsonArray::fromVariantList(m_bestTimes));
+    const QByteArray json = document.toJson(QJsonDocument::Compact);
+
+    QSaveFile file(bestTimesFilePath());
+    const bool saved = file.open(QIODevice::WriteOnly)
+        && file.write(json) == json.size()
+        && file.commit();
+    if (saved) {
+        m_settings.remove(QStringLiteral("bestTimes"));
+        m_settings.remove(QStringLiteral("bestTimesJson"));
+    } else {
+        // Retain a recoverable fallback if the dedicated file cannot be written.
+        m_settings.setValue(QStringLiteral("bestTimesJson"),
+                            QString::fromUtf8(json));
+    }
+    m_settings.sync();
 }
 
 void SettingsManager::addBestTime(int elapsedSeconds)
@@ -270,7 +390,7 @@ void SettingsManager::addBestTime(const QString &playerName, int elapsedSeconds,
 {
     if (elapsedSeconds <= 0) return;
 
-    QVariantList list = bestTimes();
+    QVariantList list = m_bestTimes;
 
     QVariantMap entry;
     entry.insert(QStringLiteral("name"), playerName.trimmed());
@@ -309,12 +429,19 @@ void SettingsManager::addBestTime(const QString &playerName, int elapsedSeconds,
         }
     }
 
-    m_settings.setValue(QStringLiteral("bestTimes"), list);
+    m_bestTimes = list;
+    saveBestTimes();
+    emit bestTimesChanged();
     emit changed();
 }
 
 void SettingsManager::clearBestTimes()
 {
+    m_bestTimes.clear();
+    QFile::remove(bestTimesFilePath());
     m_settings.remove(QStringLiteral("bestTimes"));
+    m_settings.remove(QStringLiteral("bestTimesJson"));
+    m_settings.sync();
+    emit bestTimesChanged();
     emit changed();
 }

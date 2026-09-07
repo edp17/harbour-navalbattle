@@ -164,6 +164,7 @@ Page {
                 Label { width: parent.width; wrapMode: Text.WordWrap; text: qsTr("  • enable/disable the 'AI Thinking…' popup");font.pixelSize: Theme.fontSizeSmall }
                 Label { width: parent.width; wrapMode: Text.WordWrap; text: qsTr("  • show/hide the game over overlay");font.pixelSize: Theme.fontSizeSmall }
                 Label { width: parent.width; wrapMode: Text.WordWrap; text: qsTr("  • control how sunk enemy ships are displayed (images and tint)");font.pixelSize: Theme.fontSizeSmall }
+                Label { width: parent.width; wrapMode: Text.WordWrap; text: qsTr("  • enable/disable haptic and sound feedback");font.pixelSize: Theme.fontSizeSmall }
             }
 
             SectionHeader { text: qsTr("Timer and Best times") }
@@ -171,9 +172,9 @@ Page {
                 x: Theme.horizontalPageMargin
                 width: parent.width - 2*Theme.horizontalPageMargin
                 wrapMode: Text.WordWrap
-                text: qsTr("The timer starts when the battle begins and stops when the game ends. "
+                text: qsTr("The timer counts only the time when it is your turn, excluding AI delays and time spent in the background. "
                           + "Best times are recorded only when you win, and only the top 10 fastest wins are kept for each difficulty. "
-                          + "Each entry includes the player name, completion time, and may also include shot count and pace.")
+                          + "Each entry includes the player name, completion time, shot count, and pace.")
                 font.pixelSize: Theme.fontSizeSmall
             }
 

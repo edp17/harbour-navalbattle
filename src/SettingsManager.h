@@ -13,15 +13,17 @@ class SettingsManager : public QObject
     Q_PROPERTY(int cellSizePx READ cellSizePx WRITE setCellSizePx NOTIFY changed)
     Q_PROPERTY(int hitMissHoldMs READ hitMissHoldMs WRITE setHitMissHoldMs NOTIFY changed)
     Q_PROPERTY(int thinkingHoldMs READ thinkingHoldMs WRITE setThinkingHoldMs NOTIFY changed)
-Q_PROPERTY(int aiDifficulty READ aiDifficulty WRITE setAiDifficulty NOTIFY changed)
+    Q_PROPERTY(int aiDifficulty READ aiDifficulty WRITE setAiDifficulty NOTIFY changed)
     Q_PROPERTY(int aiPace READ aiPace WRITE setAiPace NOTIFY changed)
     Q_PROPERTY(bool noTouchRule READ noTouchRule WRITE setNoTouchRule NOTIFY changed)
     Q_PROPERTY(bool showThinkingPopup READ showThinkingPopup WRITE setShowThinkingPopup NOTIFY changed)
     Q_PROPERTY(bool showGameOverOverlay READ showGameOverOverlay WRITE setShowGameOverOverlay NOTIFY changed)
     Q_PROPERTY(bool showSunkShipSprites READ showSunkShipSprites WRITE setShowSunkShipSprites NOTIFY changed)
     Q_PROPERTY(bool tintEnemyShips READ tintEnemyShips WRITE setTintEnemyShips NOTIFY changed)
+    Q_PROPERTY(bool hapticFeedback READ hapticFeedback WRITE setHapticFeedback NOTIFY changed)
+    Q_PROPERTY(bool soundEffects READ soundEffects WRITE setSoundEffects NOTIFY changed)
     Q_PROPERTY(QString playerName READ playerName WRITE setPlayerName NOTIFY changed)
-    Q_PROPERTY(QVariantList bestTimes READ bestTimes NOTIFY changed)
+    Q_PROPERTY(QVariantList bestTimes READ bestTimes NOTIFY bestTimesChanged)
 
 public:
     explicit SettingsManager(QObject *parent = nullptr);
@@ -37,7 +39,7 @@ public:
 
     int hitMissHoldMs() const;
     int thinkingHoldMs() const;
-int aiDifficulty() const;
+    int aiDifficulty() const;
 
     bool noTouchRule() const;
     void setNoTouchRule(bool v);
@@ -49,12 +51,16 @@ int aiDifficulty() const;
     void setShowSunkShipSprites(bool v);
     bool tintEnemyShips() const;
     void setTintEnemyShips(bool v);
+    bool hapticFeedback() const;
+    void setHapticFeedback(bool v);
+    bool soundEffects() const;
+    void setSoundEffects(bool v);
     QString playerName() const;
-    QVariantList bestTimes();
+    QVariantList bestTimes() const;
 
     void setHitMissHoldMs(int ms);
     void setThinkingHoldMs(int ms);
-void setAiDifficulty(int d);
+    void setAiDifficulty(int d);
     void setPlayerName(const QString &name);
 
     void setAiDelayMs(int ms);
@@ -66,7 +72,12 @@ void setAiDifficulty(int d);
 
 signals:
     void changed();
+    void bestTimesChanged();
 
 private:
+    void loadBestTimes();
+    void saveBestTimes();
+
     QSettings m_settings;
+    QVariantList m_bestTimes;
 };
